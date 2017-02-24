@@ -23,11 +23,13 @@ function scrape(url) {
             let $ele = $(ele);
             let $wrap = $ele.parent();
             let body = bodySplitter($wrap.html());
+            let bodyText = $wrap.text();
             let address = safeAddress(body)
 
             return {
               title: $ele.text(),
               body: body,
+              bodyText: bodyText,
               address: address
             };
           });
