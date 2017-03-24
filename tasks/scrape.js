@@ -2,34 +2,39 @@ const fs = require('fs');
 const path = require('path');
 const request = require('request');
 const cheerio = require('cheerio');
-const ENV = require('./env.json');
+const ENV = require('../env.json');
 
-const TARGET_ROOT = 'http://www.neworleansonline.com';
-const TARGETS = [
-  '/neworleans/cuisine/restaurants.php'
-];
+const TARGET_DOMAIN = 'www.neworleansonline.com';
+const TARGET_ROOT = `http://${TARGET_DOMAIN}`;
+const TARGETS = {
+  'tours': '/neworleans/tours/tours.php',
+  'restaurants': '/neworleans/cuisine/restaurants.php',
+  'attractions': '/neworleans/attractions/attractions.php',
+  'nightlife': '/neworleans/nightlife/nightlife.php'
+};
+const TARGET_KEYS = Object.keys(TARGETS);
 
 var googleMapsClient = require('@google/maps').createClient({
   key: ENV.GOOGLE_MAPS_API_KEY
 });
 
-function scrape(url) {
+function scrape(url, outputname) {
   return new Promise((resolve, reject) => {
     request(url, (error, response, html) => {
       if(!error){
         const $ = cheerio.load(html);
         const $content = $('a.listingsTitle');
 
-        let url = $parseNextLink($);
-        return $parseItems($, $content)
+        let nextURL = $parseNextLink($, url, outputname);
+        return $parseItems($, $content, outputname)
           .then((items) => {
             let data = {
               items,
               info: {
-                next: url
+                next: nextURL
               }
             };
-            console.log('all items resolved', data.items.length);
+            console.log('items in this batch resolved', data.items.length);
             resolve(data);
           })
           .catch((err) => {
@@ -42,7 +47,7 @@ function scrape(url) {
   })
 }
 
-function $parseItems($, $content) {
+function $parseItems($, $content, outputname) {
   return Promise.all(
     ($content
       .get()
@@ -55,6 +60,7 @@ function $parseItems($, $content) {
 
         return geocodeAddress({
             title: $ele.text(),
+            category: outputname,
             body: body,
             //bodyText: bodyText,
             address: address,
@@ -92,9 +98,11 @@ function geocodeAddress(item) {
   });
 }
 
-function $parseNextLink($) {
-  let nextLink = $('[name="next25"]').first().parents('a');
-  return (nextLink.length) ? nextLink.attr('href') : '';
+function $parseNextLink($, url, outputname) {
+  let nextLink = $('img[src*="/images/main/nextPage.gif"]').first().parents('a');
+  let nextLinkHref = (nextLink.length) ? nextLink.attr('href') : '';
+  console.log('Found next link:', nextLinkHref);
+  return nextLinkHref;
 }
 
 function safeAddress(body) {
@@ -116,15 +124,22 @@ function bodySplitter(html) {
     .map((item) => item.trim());
 }
 
-function executeScrape(url, collection) {
-  scrape(url)
+function resolveOutputName(name) {
+  return path.join(__dirname, '/../data', `${name}.json`);
+}
+
+function executeScrape(urlroot, url, collection, outputname, finalCallback) {
+  console.log(`New Scrape data: ${urlroot} - ${url} - ${outputname}`);
+  return scrape(url, outputname)
     .then((data) => {
-      console.log(`More data: ${!!data.info.next}`, collection.length);
+      console.log(`More data: ${!!data.info.next}`, collection.length, data.info);
       collection.push(data.items);
       if (data.info.next) {
-        executeScrape(`${TARGET_ROOT}${data.info.next}`, collection);
+        executeScrape(urlroot, `${urlroot}${data.info.next}`, collection, outputname, finalCallback);
       } else {
-        writeScrapedData('restaurants', collection);
+        writeScrapedData(outputname, collection);
+        console.log(`Finished executeScrape ${outputname}`, !!finalCallback);
+        finalCallback(outputname);
       }
     })
     .catch((err) => {
@@ -133,10 +148,29 @@ function executeScrape(url, collection) {
 }
 
 function writeScrapedData(name, data) {
-  fs.writeFile(path.join('data', `${name}.json`), JSON.stringify(data), (err) => {
+  let filename = resolveOutputName(name);
+  fs.writeFile(filename, JSON.stringify(data), (err) => {
     if (err) throw err;
-    console.log('It\'s saved!');
+    console.log(`It's saved!`, filename, name);
   });
 }
 
-executeScrape(`${TARGET_ROOT}${TARGETS[0]}`, []);
+function scrapeIterator(keyindex) {
+  console.log(TARGET_KEYS, keyindex, TARGET_KEYS[keyindex]);
+  let outputname = resolveOutputName(TARGET_KEYS[keyindex]);
+  if (TARGET_KEYS[keyindex]) {
+    console.log('starting: ', outputname);
+    let targetURL = `${TARGET_ROOT}${TARGETS[TARGET_KEYS[keyindex]]}`;
+
+    executeScrape(targetURL, targetURL, [], TARGET_KEYS[keyindex], () => {
+      console.log('next scrape: ', keyindex + 1);
+      scrapeIterator((keyindex + 1));
+    })
+  } else {
+    console.timeEnd('scrape');
+  }
+}
+
+console.time('scrape');
+scrapeIterator(0);
+
