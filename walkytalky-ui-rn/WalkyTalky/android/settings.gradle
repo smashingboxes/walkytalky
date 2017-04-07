@@ -1,0 +1,3 @@
+rootProject.name = 'WalkyTalky'
+
+include ':app'
